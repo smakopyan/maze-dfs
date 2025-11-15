@@ -1,0 +1,513 @@
+from ultralytics import YOLO
+import cv2
+import os
+import rclpy
+from rclpy.node import Node
+import numpy as np
+from queue import PriorityQueue
+from rclpy.qos import QoSProfile
+import math
+from nav_msgs.msg import OccupancyGrid, Odometry 
+from geometry_msgs.msg import PoseStamped, Twist
+from sensor_msgs.msg import Image
+import time
+import cv2
+from visualization_msgs.msg import Marker
+from geometry_msgs.msg import Point
+from std_msgs.msg import ColorRGBA
+import os
+from cv_bridge import CvBridge
+import random
+
+def Do_DFS(costmap,v):
+    x, y = v
+    if 0 <= x < costmap.shape[0] and 0 <= y < costmap.shape[1]:
+        costmap[x][y] = 2
+        path = [(x,y)]
+        neighbors = [(0,1), (1,0), (0,-1), (-1,0),
+                        (1,1), (1,-1), (-1,1), (-1,-1)]
+        
+
+        for dx,dy in neighbors:
+            x_new, y_new = x+dx, y+dy
+            if costmap[x_new][y_new] == 0 and 0 <= x_new < costmap.shape[0] and 0 <= y_new < costmap.shape[1]:
+                path.extend(Do_DFS(costmap, (y_new, x_new))) 
+            print(path)
+            return path
+
+class node:
+    def __init__(self, parent=None, position=None):
+        self.parent = parent
+        self.position = position
+        self.g = 0
+        self.h = 0
+        self.f = 0
+
+    def __eq__(self, other):
+        return self.position == other.position
+
+    def __lt__(self, other):
+        return self.f < other.f
+
+def heuristic(a, b):
+    return np.linalg.norm(np.array(a) - np.array(b))
+
+def theta_star(start, end, grid):
+    start_node = node(None, start)
+    end_node = node(None, end)
+
+    open_list = PriorityQueue()
+    closed_list = dict()
+
+    open_list.put((start_node.f, start_node))
+    closed_list[start_node.position] = start_node
+
+    while not open_list.empty():
+        current_node = open_list.get()[1]
+
+        if current_node.position == end_node.position:
+            path = []
+            while current_node:
+                path.append(current_node.position)
+                current_node = current_node.parent
+            return path[::-1]
+
+        neighbors = [(0,1), (1,0), (0,-1), (-1,0),
+                    (1,1), (1,-1), (-1,1), (-1,-1)]
+
+        for new_position in neighbors:
+            node_position = (
+                current_node.position[0] + new_position[0],
+                current_node.position[1] + new_position[1]
+            )
+
+            if node_position[0] < 0 or node_position[0] >= grid.shape[0]:
+                continue
+            if node_position[1] < 0 or node_position[1] >= grid.shape[1]:
+                continue
+            if grid[node_position[0]][node_position[1]] == 1:
+                continue
+            if current_node.parent and line_of_sight(current_node.parent.position, node_position, grid):
+                new_g = current_node.parent.g + heuristic(current_node.parent.position, node_position)
+                tentative_node = node(current_node.parent, node_position)
+            else:
+                new_g = current_node.g + heuristic(current_node.position, node_position)
+                tentative_node = node(current_node, node_position)
+
+            if node_position in closed_list:
+                existing_node = closed_list[node_position]
+                if new_g >= existing_node.g:
+                    continue
+                closed_list.pop(node_position)
+
+            tentative_node.g = new_g
+            tentative_node.h = heuristic(tentative_node.position, end_node.position)
+            tentative_node.f = tentative_node.g + tentative_node.h
+
+            open_list.put((tentative_node.f, tentative_node))
+            closed_list[tentative_node.position] = tentative_node
+
+    return None
+
+def line_of_sight(start, end, grid):
+    x0, y0 = start
+    x1, y1 = end
+    
+    dx = abs(x1 - x0)
+    dy = abs(y1 - y0)
+    sx = 1 if x0 < x1 else -1
+    sy = 1 if y0 < y1 else -1
+    err = dx - dy
+
+    while True:
+        if grid[x0][y0] == 1:
+            return False
+            
+        if x0 == x1 and y0 == y1:
+            break
+        e2 = 2 * err
+        if e2 > -dy:
+            err -= dy
+            x0 += sx
+        if e2 < dx:
+            err += dx
+            y0 += sy
+    return True
+
+
+expansion_size = 7
+
+def euler_from_quaternion(x, y, z, w):
+    t0 = +2.0 * (w * x + y * z)
+    t1 = +1.0 - 2.0 * (x * x + y * y)
+    roll_x = math.atan2(t0, t1)
+     
+    t2 = +2.0 * (w * y - z * x)
+    t2 = +1.0 if t2 > +1.0 else t2
+    t2 = -1.0 if t2 < -1.0 else t2
+    pitch_y = math.asin(t2)
+     
+    t3 = +2.0 * (w * z + x * y)
+    t4 = +1.0 - 2.0 * (y * y + z * z)
+    yaw_z = math.atan2(t3, t4)
+     
+    return yaw_z
+
+def costmap(data, width, height, resolution):
+    grid = np.array(data, dtype=np.int8).reshape(height, width)
+    
+    obstacles_mask = np.where(grid == 100, 255, 0).astype(np.uint8)
+    
+    kernel_size = 2 * expansion_size + 1
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+    dilated_obstacles = cv2.dilate(obstacles_mask, kernel)
+    result = np.where(dilated_obstacles == 255, 100, grid)
+    result[grid == -1] = -1
+    return result.flatten().tolist()
+
+
+
+
+class Navigation(Node):
+    def __init__(self):
+        super().__init__('data_collecter')
+
+        self.bridge = CvBridge()
+
+        self.img_sub = self.create_subscription(
+            Image, '/camera/image_raw',
+            self.camera_callback,
+            10
+        )
+
+        self.subscription_map = self.create_subscription(
+            OccupancyGrid, 'map', self.map_callback, 10
+        )
+        self.subscription_odom = self.create_subscription(
+            Odometry, 'odom', self.odom_callback, 10
+        )
+
+        self.cmd_vel_pub = self.create_publisher(Twist, 'cmd_vel', 10)
+        self.path_marker_pub = self.create_publisher(Marker, '/path_marker', 10)
+        self.world_to_grid_marker_pub = self.create_publisher(Marker, '/world_to_grid_marker', 10)
+
+        self.model = YOLO('/home/sa/turtlebot3_ws/src/maze-dfs/maze-dfs/runs/detect/train3/weights/best.pt')
+
+        self.data = None
+        self.path_to_images = 'collected_images'
+        self.img_count = 0
+        self.timer = self.create_timer(2.0, self.nav_timer)
+        self.map_initialized = False
+        self.x = 0.0
+        self.y = 0.0
+        self.yaw = 0.0
+        self.path = []
+        self.count = 0
+        self.goal = None
+
+        self.kp_distance = 0.5    # Уменьшили
+        self.ki_distance = 0.005  # Уменьшили  
+        self.kd_distance = 0.2    # Уменьшили
+        
+        # Угловые коэффициенты будут использоваться в улучшенной функции
+        self.kp_angle = 0.8       # Уменьшили
+        self.ki_angle = 0.01      # Уменьшили
+        self.kd_angle = 0.2       # Уменьшили
+        self.previous_distance = 0
+        self.total_distance = 0
+        self.previous_angle = 0
+        self.total_angle = 0
+        self.last_rotation = 0
+        
+        self.current_waypoint_index = 0
+        self.navigating_to_waypoint = False
+    def camera_callback(self, msg):
+        cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+        self.data = cv_image
+
+    def map_callback(self, msg):
+        if not self.map_initialized:
+            self.map_resolution = msg.info.resolution
+            self.map_origin = [
+                msg.info.origin.position.x,
+                msg.info.origin.position.y
+            ]
+            self.width = msg.info.width
+            self.height = msg.info.height
+            self.grid = costmap(msg.data, self.width, self.height, self.map_resolution)
+            self.grid = np.array(self.grid).reshape(self.height, self.width)
+            self.grid = np.where((self.grid == 100) | (self.grid == -1), 1, 0).astype(np.int8)
+            self.map_initialized = True
+            self.costmap_dfs = self.grid.copy()
+
+            self.get_logger().info("Map initialized")
+
+    def odom_callback(self, msg):
+        self.x = msg.pose.pose.position.x
+        self.y = msg.pose.pose.position.y
+        self.yaw = euler_from_quaternion(
+            msg.pose.pose.orientation.x,
+            msg.pose.pose.orientation.y,
+            msg.pose.pose.orientation.z,
+            msg.pose.pose.orientation.w
+        )
+    
+
+    def pure_pursuit(self):
+        closest_point = None
+        v = 0.1
+        lookahead = 0.2
+
+        for i in range(len(self.path)):
+            x, y = self.path[i]
+            distance = math.hypot(self.x - x, self.y - y)
+            if distance > lookahead:
+                closest_point = (x, y)
+                break
+
+        if closest_point is None:
+            closest_point = self.path[-1]
+
+        target_heading = math.atan2(closest_point[1] - self.y, closest_point[0] - self.x)
+        desired_steering_angle = target_heading - self.yaw
+
+        if desired_steering_angle > math.pi:
+            desired_steering_angle -= 2 * math.pi
+        elif desired_steering_angle < -math.pi:
+            desired_steering_angle += 2 * math.pi
+
+        if abs(desired_steering_angle) > math.pi/4:
+            v = 0.0
+
+        return v, desired_steering_angle, closest_point
+
+    def set_goal(self, grid):
+        goal = None
+        x = random.randint(0, grid.shape[1]-1)
+        y = random.randint(0, grid.shape[0]-1)
+
+        if grid[y][x]==0:
+            goal = (x,y)
+            return goal
+        else:
+            return self.set_goal(grid)
+
+
+    def nav_timer(self):
+        if self.map_initialized:
+            if self.data is not None:
+                results = self.model(self.data)
+                if len(results[0].boxes) != 0:
+                    # Обнаружен объект - останавливаемся
+                    for i in range(len(results[0].boxes)):
+                        self.get_logger().info(f'Object detected, confidence: {results[0].boxes.conf[i].cpu().numpy()}')
+                    self.stop_robot()
+                    self.navigating_to_waypoint = False
+                    self.current_waypoint_index = 0
+                    return
+
+                # Если не навигация к точке пути, планируем новый путь
+                if not self.navigating_to_waypoint:
+                    start = self.world_to_grid(self.x, self.y)
+
+                    if self.goal is None:
+                        self.goal = self.set_goal(self.grid)
+
+                    path = theta_star((start[1], start[0]), (self.goal[1], self.goal[0]), self.grid)
+
+                    if path is None:
+                        self.get_logger().warn("Path not found!")
+                        return
+                    
+                    self.path = [self.grid_to_world(i[1], i[0]) for i in path]
+                    self.visualize_path()
+                    self.reset_pid_state()
+                    self.current_waypoint_index = 0
+                    self.navigating_to_waypoint = True
+                    self.get_logger().info(f"Starting navigation with {len(self.path)} waypoints")
+                    # Логируем все точки пути для отладки
+                    for i, point in enumerate(self.path):
+                        self.get_logger().info(f"Waypoint {i}: ({point[0]:.2f}, {point[1]:.2f})")
+
+                # Навигация по точкам пути
+                if self.navigating_to_waypoint and self.path:
+                    if self.current_waypoint_index < len(self.path):
+                        current_waypoint = self.path[self.current_waypoint_index]
+                        
+                        # Пропускаем точку, если мы уже очень близко к ней
+                        distance_to_waypoint = math.sqrt(pow(current_waypoint[0] - self.x, 2) + 
+                                                    pow(current_waypoint[1] - self.y, 2))
+                        
+                        if distance_to_waypoint < 0.05:  # Очень маленький порог
+                            self.current_waypoint_index += 1
+                            self.reset_pid_state()
+                            if self.current_waypoint_index < len(self.path):
+                                self.get_logger().info(f"Skipping close waypoint {self.current_waypoint_index}")
+                                current_waypoint = self.path[self.current_waypoint_index]
+
+                        
+                        twist, distance = self.pid_navigate_to_waypoint(current_waypoint[0], current_waypoint[1])
+                        self.cmd_vel_pub.publish(twist)
+                        
+                        # Проверка достижения текущей точки
+                        if distance < 0.15:  # Увеличили порог достижения точки
+                            self.current_waypoint_index += 1
+                            self.reset_pid_state()
+                            if self.current_waypoint_index < len(self.path):
+                                self.get_logger().info(f"Reached waypoint {self.current_waypoint_index}/{len(self.path)}")
+                    
+                    # Проверка достижения конечной цели
+                    if self.current_waypoint_index >= len(self.path) or \
+                    (abs(self.x - self.path[-1][0]) < 0.2 and  # Увеличили порог
+                        abs(self.y - self.path[-1][1]) < 0.2):
+                        self.stop_robot()
+                        self.get_logger().info("The goal has been reached!")
+                        self.goal = None
+                        self.path = []
+                        self.navigating_to_waypoint = False
+                        self.current_waypoint_index = 0
+    
+    def stop_robot(self):
+        twist = Twist()
+        twist.linear.x = 0.0
+        twist.angular.z = 0.0
+        self.cmd_vel_pub.publish(twist)
+        
+    def world_to_grid(self, x_world, y_world, map_offset = (45, 15)):
+        x_grid = int((x_world - self.map_origin[0]) / self.map_resolution) + map_offset[0]
+        y_grid = int((y_world - self.map_origin[1]) / self.map_resolution) + map_offset[1]
+        return (x_grid, y_grid)
+
+    def grid_to_world(self, x_grid, y_grid, map_offset = (45,15)):
+        x_world = (x_grid - map_offset[0])* self.map_resolution + self.map_origin[0]
+        y_world = (y_grid - map_offset[1]) * self.map_resolution + self.map_origin[1]
+        return (x_world, y_world)
+    
+    def visualize_path(self):
+        marker = Marker()
+        marker.header.frame_id = "map"
+        marker.header.stamp = self.get_clock().now().to_msg()
+        marker.ns = "path"
+        marker.id = 0
+        marker.type = Marker.LINE_STRIP
+        marker.action = Marker.ADD
+        marker.scale.x = 0.05
+        marker.color.a = 1.0
+        marker.color.g = 1.0
+        marker.color.r = 0.0
+        marker.color.b = 0.0
+
+        for (x, y) in self.path:
+            p = Point()
+            p.x = x
+            p.y = y
+            p.z = 0.0
+            marker.points.append(p)
+
+        self.path_marker_pub.publish(marker)
+
+
+    def visualize_world_to_map(self, point):
+        marker = Marker()
+        marker.header.frame_id = "map"
+        marker.header.stamp = self.get_clock().now().to_msg()
+        marker.ns = "world_to_grid"
+        marker.id = 0
+        marker.type = Marker.SPHERE
+        marker.action = Marker.ADD
+        marker.pose.position.x = point[0]
+        marker.pose.position.y = point[1]
+        marker.pose.position.z = 0.0
+        marker.scale.x = 0.1
+        marker.scale.y = 0.1
+        marker.scale.z = 0.1
+        marker.color.a = 1.0
+        marker.color.r = 1.0
+        marker.color.g = 0.0
+        marker.color.b = 0.0
+        self.world_to_grid_marker_pub.publish(marker)
+
+
+    def pid_navigate_to_waypoint(self, goal_x, goal_y):
+        """Улучшенный ПИД-регулятор с обработкой резких изменений угла"""
+        move_cmd = Twist()
+        
+        # Вычисление расстояния до цели
+        distance = math.sqrt(pow(goal_x - self.x, 2) + pow(goal_y - self.y, 2))
+        
+        # Вычисление угловой ошибки
+        target_angle = math.atan2(goal_y - self.y, goal_x - self.x)
+        angle_error = target_angle - self.yaw
+        
+        # Нормализация угловой ошибки в диапазон [-π, π]
+        if angle_error > math.pi:
+            angle_error -= 2 * math.pi
+        elif angle_error < -math.pi:
+            angle_error += 2 * math.pi
+        
+        # ОБНАРУЖЕНИЕ РЕЗКИХ ИЗМЕНЕНИЙ УГЛА
+        # Если ошибка слишком большая, сначала поворачиваем на месте
+        if abs(angle_error) > math.pi/2:  # Больше 90 градусов
+            move_cmd.linear.x = 0.0  # Останавливаем линейное движение
+            move_cmd.angular.z = math.copysign(0.5, angle_error)  # Медленный поворот
+            self.get_logger().info(f"Large angle error: {angle_error:.2f}, rotating in place")
+            return move_cmd, distance
+        
+        # ПИД вычисления для нормального случая
+        diff_angle = angle_error - self.previous_angle
+        diff_distance = distance - self.previous_distance
+        
+        # Более мягкие коэффициенты для угла
+        control_signal_angle = (0.8 * angle_error +  # Уменьшили kp
+                            0.01 * self.total_angle +  # Уменьшили ki
+                            0.2 * diff_angle)  # Уменьшили kd
+        
+        control_signal_distance = (self.kp_distance * distance + 
+                                self.ki_distance * self.total_distance + 
+                                self.kd_distance * diff_distance)
+        
+        # Применение команд
+        move_cmd.angular.z = control_signal_angle
+        move_cmd.linear.x = min(control_signal_distance, 0.1)  # Уменьшили максимальную скорость
+        
+        # Ограничение угловой скорости
+        move_cmd.angular.z = max(min(move_cmd.angular.z, 1.0), -1.0)  # Уменьшили ограничение
+        
+        # Обновление состояния ПИД
+        self.previous_distance = distance
+        self.total_distance += distance
+        self.previous_angle = angle_error
+        self.total_angle += angle_error
+        self.last_rotation = self.yaw
+        
+        # Отладочная информация
+        self.get_logger().info(f"Target: ({goal_x:.2f}, {goal_y:.2f}), "
+                            f"Current: ({self.x:.2f}, {self.y:.2f}), "
+                            f"Distance: {distance:.2f}, "
+                            f"Angle error: {angle_error:.2f}, "
+                            f"Angular: {move_cmd.angular.z:.2f}, "
+                            f"Linear: {move_cmd.linear.x:.2f}")
+        
+        return move_cmd, distance
+
+    def reset_pid_state(self):
+        """Сброс состояния ПИД регулятора"""
+        self.previous_distance = 0
+        self.total_distance = 0
+        self.previous_angle = 0
+        self.total_angle = 0
+        self.last_rotation = 0
+
+def main(args = None):
+    rclpy.init(args=args)
+    collector = Navigation()
+    try:
+        rclpy.spin(collector)
+    except KeyboardInterrupt:
+        print("you stopped it")
+    finally:
+        collector.destroy_node()
+        rclpy.shutdown()
+
+if __name__== '__main__':
+    main()

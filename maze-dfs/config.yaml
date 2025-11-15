@@ -1,0 +1,6 @@
+path: /home/sa/turtlebot3_ws/src/maze-dfs/data
+train: images/train
+val: images/train
+
+names:
+  0: cocacola
