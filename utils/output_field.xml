@@ -1,0 +1,41 @@
+<?xml version="1.0" ?>
+<field>
+  <boundary>
+    <point>
+      <x>-6.850</x>
+      <y>1.420</y>
+    </point>
+    <point>
+      <x>-6.850</x>
+      <y>-7.780</y>
+    </point>
+    <point>
+      <x>8.500</x>
+      <y>-7.780</y>
+    </point>
+    <point>
+      <x>8.500</x>
+      <y>1.420</y>
+    </point>
+  </boundary>
+  <obstacles>
+    <obstacle>
+      <point>
+        <x>-6.850</x>
+        <y>1.420</y>
+      </point>
+      <point>
+        <x>-6.850</x>
+        <y>-7.780</y>
+      </point>
+      <point>
+        <x>8.500</x>
+        <y>-7.780</y>
+      </point>
+      <point>
+        <x>8.500</x>
+        <y>1.420</y>
+      </point>
+    </obstacle>
+  </obstacles>
+</field>
