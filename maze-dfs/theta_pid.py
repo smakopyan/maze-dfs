@@ -205,14 +205,13 @@ class Navigation(Node):
         self.count = 0
         self.goal = None
 
-        self.kp_distance = 0.5    # Уменьшили
-        self.ki_distance = 0.005  # Уменьшили  
-        self.kd_distance = 0.2    # Уменьшили
-        
-        # Угловые коэффициенты будут использоваться в улучшенной функции
-        self.kp_angle = 0.8       # Уменьшили
-        self.ki_angle = 0.01      # Уменьшили
-        self.kd_angle = 0.2       # Уменьшили
+        self.kp_distance = 0.5    
+        self.ki_distance = 0.005    
+        self.kd_distance = 0.2    
+    
+        self.kp_angle = 0.8       
+        self.ki_angle = 0.01      
+        self.kd_angle = 0.2       
         self.previous_distance = 0
         self.total_distance = 0
         self.previous_angle = 0
@@ -298,7 +297,6 @@ class Navigation(Node):
             if self.data is not None:
                 results = self.model(self.data)
                 if len(results[0].boxes) != 0:
-                    # Обнаружен объект - останавливаемся
                     for i in range(len(results[0].boxes)):
                         self.get_logger().info(f'Object detected, confidence: {results[0].boxes.conf[i].cpu().numpy()}')
                     self.stop_robot()
@@ -306,7 +304,6 @@ class Navigation(Node):
                     self.current_waypoint_index = 0
                     return
 
-                # Если не навигация к точке пути, планируем новый путь
                 if not self.navigating_to_waypoint:
                     start = self.world_to_grid(self.x, self.y)
 
@@ -325,20 +322,17 @@ class Navigation(Node):
                     self.current_waypoint_index = 0
                     self.navigating_to_waypoint = True
                     self.get_logger().info(f"Starting navigation with {len(self.path)} waypoints")
-                    # Логируем все точки пути для отладки
                     for i, point in enumerate(self.path):
                         self.get_logger().info(f"Waypoint {i}: ({point[0]:.2f}, {point[1]:.2f})")
 
-                # Навигация по точкам пути
                 if self.navigating_to_waypoint and self.path:
                     if self.current_waypoint_index < len(self.path):
                         current_waypoint = self.path[self.current_waypoint_index]
                         
-                        # Пропускаем точку, если мы уже очень близко к ней
                         distance_to_waypoint = math.sqrt(pow(current_waypoint[0] - self.x, 2) + 
                                                     pow(current_waypoint[1] - self.y, 2))
                         
-                        if distance_to_waypoint < 0.05:  # Очень маленький порог
+                        if distance_to_waypoint < 0.05: 
                             self.current_waypoint_index += 1
                             self.reset_pid_state()
                             if self.current_waypoint_index < len(self.path):
@@ -349,8 +343,7 @@ class Navigation(Node):
                         twist, distance = self.pid_navigate_to_waypoint(current_waypoint[0], current_waypoint[1])
                         self.cmd_vel_pub.publish(twist)
                         
-                        # Проверка достижения текущей точки
-                        if distance < 0.15:  # Увеличили порог достижения точки
+                        if distance < 0.15:  
                             self.current_waypoint_index += 1
                             self.reset_pid_state()
                             if self.current_waypoint_index < len(self.path):
@@ -429,58 +422,46 @@ class Navigation(Node):
 
 
     def pid_navigate_to_waypoint(self, goal_x, goal_y):
-        """Улучшенный ПИД-регулятор с обработкой резких изменений угла"""
         move_cmd = Twist()
         
-        # Вычисление расстояния до цели
         distance = math.sqrt(pow(goal_x - self.x, 2) + pow(goal_y - self.y, 2))
         
-        # Вычисление угловой ошибки
         target_angle = math.atan2(goal_y - self.y, goal_x - self.x)
         angle_error = target_angle - self.yaw
         
-        # Нормализация угловой ошибки в диапазон [-π, π]
         if angle_error > math.pi:
             angle_error -= 2 * math.pi
         elif angle_error < -math.pi:
             angle_error += 2 * math.pi
-        
-        # ОБНАРУЖЕНИЕ РЕЗКИХ ИЗМЕНЕНИЙ УГЛА
-        # Если ошибка слишком большая, сначала поворачиваем на месте
-        if abs(angle_error) > math.pi/2:  # Больше 90 градусов
-            move_cmd.linear.x = 0.0  # Останавливаем линейное движение
-            move_cmd.angular.z = math.copysign(0.5, angle_error)  # Медленный поворот
+  
+        if abs(angle_error) > math.pi/2:  
+            move_cmd.linear.x = 0.0  
+            move_cmd.angular.z = math.copysign(0.5, angle_error) 
             self.get_logger().info(f"Large angle error: {angle_error:.2f}, rotating in place")
             return move_cmd, distance
         
-        # ПИД вычисления для нормального случая
         diff_angle = angle_error - self.previous_angle
         diff_distance = distance - self.previous_distance
         
-        # Более мягкие коэффициенты для угла
-        control_signal_angle = (0.8 * angle_error +  # Уменьшили kp
-                            0.01 * self.total_angle +  # Уменьшили ki
-                            0.2 * diff_angle)  # Уменьшили kd
+        control_signal_angle = (0.8 * angle_error +  
+                            0.01 * self.total_angle +
+                            0.2 * diff_angle)  
         
         control_signal_distance = (self.kp_distance * distance + 
                                 self.ki_distance * self.total_distance + 
                                 self.kd_distance * diff_distance)
         
-        # Применение команд
         move_cmd.angular.z = control_signal_angle
-        move_cmd.linear.x = min(control_signal_distance, 0.1)  # Уменьшили максимальную скорость
+        move_cmd.linear.x = min(control_signal_distance, 0.1)  
         
-        # Ограничение угловой скорости
-        move_cmd.angular.z = max(min(move_cmd.angular.z, 1.0), -1.0)  # Уменьшили ограничение
+        move_cmd.angular.z = max(min(move_cmd.angular.z, 1.0), -1.0)  
         
-        # Обновление состояния ПИД
         self.previous_distance = distance
         self.total_distance += distance
         self.previous_angle = angle_error
         self.total_angle += angle_error
         self.last_rotation = self.yaw
         
-        # Отладочная информация
         self.get_logger().info(f"Target: ({goal_x:.2f}, {goal_y:.2f}), "
                             f"Current: ({self.x:.2f}, {self.y:.2f}), "
                             f"Distance: {distance:.2f}, "
@@ -491,7 +472,6 @@ class Navigation(Node):
         return move_cmd, distance
 
     def reset_pid_state(self):
-        """Сброс состояния ПИД регулятора"""
         self.previous_distance = 0
         self.total_distance = 0
         self.previous_angle = 0

@@ -26,18 +26,18 @@ import random
 
 class CoveragePlanner:
     def __init__(self, grid):
-        self.grid = grid  # 0 - свободно, 1 - препятствие
+        self.grid = grid  
         self.rows, self.cols = grid.shape
         self.visited = np.zeros_like(grid)
         self.directions = [(0, 1), (1, 0), (0, -1), (-1, 0)]  
-        self.current_dir = 0  # начальное направление - вправо
+        self.current_dir = 0  
         
     def snake_move(self, start_pos):
         path = []
         x, y = start_pos
         stuck_count = 0
         
-        while stuck_count < 2:  # пробуем обойти препятствие
+        while stuck_count < 2: 
             dx, dy = self.directions[self.current_dir]
             new_x, new_y = x + dx, y + dy
             
@@ -104,13 +104,12 @@ class CoveragePlanner:
                         queue.append((new_x, new_y))
                         visited_bfs.add((new_x, new_y))
         
-        return None  # все точки посещены
+        return None  
         
     def theta_star(self, start, goal):
         open_set = []
         closed_set = set()
         
-        # Словари для хранения g-стоимости и родителей
         g_score = {start: 0}
         parent = {start: start}
         
@@ -128,9 +127,7 @@ class CoveragePlanner:
                 if neighbor in closed_set:
                     continue
                 
-                # Theta*: проверка прямой видимости к родителю текущей точки
                 if parent[current] != current and self.has_line_of_sight(parent[current], neighbor):
-                    # Прямая видимость есть - обновляем через родителя текущей точки
                     tentative_g = g_score[parent[current]] + self.distance(parent[current], neighbor)
                     
                     if neighbor not in g_score or tentative_g < g_score[neighbor]:
@@ -139,7 +136,6 @@ class CoveragePlanner:
                         f_score = tentative_g + self.heuristic(neighbor, goal)
                         heapq.heappush(open_set, (f_score, neighbor))
                 else:
-                    # Стандартный A* шаг
                     tentative_g = g_score[current] + self.distance(current, neighbor)
                     
                     if neighbor not in g_score or tentative_g < g_score[neighbor]:
@@ -148,10 +144,9 @@ class CoveragePlanner:
                         f_score = tentative_g + self.heuristic(neighbor, goal)
                         heapq.heappush(open_set, (f_score, neighbor))
         
-        return None  # путь не найден
+        return None 
 
     def has_line_of_sight(self, start, end):
-        """Проверка прямой видимости между двумя точками (алгоритм Брезенхема)"""
         x0, y0 = start
         x1, y1 = end
         
@@ -166,7 +161,7 @@ class CoveragePlanner:
         dy *= 2
         
         for _ in range(n):
-            if self.grid[x, y] == 1:  # препятствие
+            if self.grid[x, y] == 1:  
                 return False
             
             if error > 0:
@@ -194,7 +189,7 @@ class CoveragePlanner:
         return math.sqrt((a[0] - b[0])**2 + (a[1] - b[1])**2)
 
     def heuristic(self, a, b):
-        return abs(a[0] - b[0]) + abs(a[1] - b[1])  # манхэттенское расстояние
+        return abs(a[0] - b[0]) + abs(a[1] - b[1]) 
 
     def reconstruct_path(self, parent, start, goal):
         path = []
@@ -214,26 +209,22 @@ class CoveragePlanner:
         current_pos = start_pos
         self.visited[start_pos] = 1
         
-        max_iterations = 1000  # защита от бесконечного цикла
+        max_iterations = 1000 
         iteration = 0
         
         while iteration < max_iterations:
             iteration += 1
             
-            # Двигаемся змейкой
             snake_path, current_pos = self.snake_move(current_pos)
             if snake_path:
                 full_path.extend(snake_path)
             
-            # Ищем следующую цель
             next_target = self.find_nearest_unvisited(current_pos)
             if next_target is None:
                 break
                 
-            # Строим путь до цели
             theta_path = self.theta_star(current_pos, next_target)
             if theta_path is None:
-                # Если путь не найден, отмечаем цель как недостижимую
                 self.visited[next_target] = 1
                 continue
                 
@@ -263,18 +254,14 @@ def euler_from_quaternion(x, y, z, w):
     return yaw_z
 
 def costmap(data, width, height, resolution):
-    """Улучшенная обработка карты"""
     grid = np.array(data, dtype=np.int8).reshape(height, width)
     
-    # Создаем маску препятствий
     obstacles_mask = np.where(grid == 100, 255, 0).astype(np.uint8)
     
-    # Расширяем препятствия
     kernel_size = expansion_size
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
     dilated_obstacles = cv2.dilate(obstacles_mask, kernel)
     
-    # Объединяем с оригинальной картой
     result = np.where(dilated_obstacles == 255, 100, grid)
     result[grid == -1] = -1  # сохраняем неизвестные области
     
@@ -321,18 +308,17 @@ class Navigation(Node):
         self.count = 0
         self.goal = None
         
-        self.kp_distance = 0.3    # Уменьшено для плавности
-        self.ki_distance = 0.001  # Уменьшено
-        self.kd_distance = 0.1    # Уменьшено
-        self.kp_angle = 0.5       # Уменьшено для плавных поворотов
-        self.ki_angle = 0.005     # Уменьшено
-        self.kd_angle = 0.1       # Уменьшено
+        self.kp_distance = 0.3    
+        self.ki_distance = 0.001  
+        self.kd_distance = 0.1    
+        self.kp_angle = 0.5       
+        self.ki_angle = 0.005     
+        self.kd_angle = 0.1       
         
-        # Параметры движения
         self.max_linear_speed = 0.15
         self.max_angular_speed = 0.4
-        self.goal_tolerance = 0.15     # Точность достижения точки
-        self.angle_tolerance = 0.1    # Точность ориентации
+        self.goal_tolerance = 0.15    
+        self.angle_tolerance = 0.1    
         
         self.previous_distance = 0
         self.total_distance = 0
@@ -381,52 +367,42 @@ class Navigation(Node):
     
 
     def improved_pid_navigate(self, goal_x, goal_y):
-        """Улучшенный ПИД-контроллер с адаптивной скоростью"""
         current_time = self.get_clock().now()
         dt = (current_time - self.last_time).nanoseconds / 1e9
-        dt = max(dt, 0.01)  # Минимальный шаг времени
+        dt = max(dt, 0.01) 
         
         move_cmd = Twist()
         
-        # Вычисление ошибок
         dx = goal_x - self.x
         dy = goal_y - self.y
         distance_error = math.sqrt(dx**2 + dy**2)
         target_angle = math.atan2(dy, dx)
         
-        # Вычисление ошибки угла (нормализованной)
         angle_error = target_angle - self.yaw
         while angle_error > math.pi:
             angle_error -= 2 * math.pi
         while angle_error < -math.pi:
             angle_error += 2 * math.pi
         
-        # Адаптивная скорость на основе расстояния и угла
         if distance_error < self.goal_tolerance:
-            # Достигли цели
             move_cmd.linear.x = 0.0
             move_cmd.angular.z = 0.0
             self.waypoint_reached = True
             return move_cmd, distance_error, True
         
-        # ПИД для линейной скорости
         linear_vel = distance_error * self.kp_distance
         linear_vel = min(linear_vel, self.max_linear_speed)
         
-        # Адаптивное уменьшение скорости при больших угловых ошибках
         speed_reduction = 1.0 - min(abs(angle_error) / (math.pi/2), 0.8)
         linear_vel *= speed_reduction
         
-        # ПИД для угловой скорости
         angular_vel = angle_error * self.kp_angle
         
-        # Ограничение угловой скорости
         if angular_vel > 0:
             angular_vel = min(angular_vel, self.max_angular_speed)
         else:
             angular_vel = max(angular_vel, -self.max_angular_speed)
         
-        # Если угол слишком большой - сначала поворачиваем на месте
         if abs(angle_error) > math.pi/3:  # ~60 градусов
             move_cmd.linear.x = 0.0
             move_cmd.angular.z = angular_vel
@@ -438,11 +414,9 @@ class Navigation(Node):
         return move_cmd, distance_error, False
 
     def pure_pursuit_improved(self, lookahead_distance=0.3):
-        """Улучшенный Pure Pursuit с поиском целевой точки"""
         if len(self.path) < 2:
             return 0.0, 0.0, None
         
-        # Находим ближайшую точку на пути
         closest_point = None
         closest_dist = float('inf')
         closest_index = 0
@@ -454,7 +428,6 @@ class Navigation(Node):
                 closest_point = (x, y)
                 closest_index = i
         
-        # Ищем целевую точку на lookahead расстоянии
         target_point = None
         for i in range(closest_index, len(self.path)):
             x, y = self.path[i]
@@ -463,42 +436,32 @@ class Navigation(Node):
                 target_point = (x, y)
                 break
         
-        # Если не нашли, берем последнюю точку
         if target_point is None:
             target_point = self.path[-1]
         
-        # Вычисление управления
         target_x, target_y = target_point
         
-        # Вектор к целевой точке
         dx = target_x - self.x
         dy = target_y - self.y
         
-        # Угол к целевой точке
         target_angle = math.atan2(dy, dx)
         angle_error = target_angle - self.yaw
         
-        # Нормализация угла
         while angle_error > math.pi:
             angle_error -= 2 * math.pi
         while angle_error < -math.pi:
             angle_error += 2 * math.pi
         
-        # Вычисление кривизны
         distance_to_target = math.hypot(dx, dy)
         if distance_to_target < 0.001:
             return 0.0, 0.0, target_point
         
-        # Закон управления Pure Pursuit
         curvature = 2.0 * dy / (distance_to_target ** 2)
         
-        # Линейная скорость (адаптивная)
         linear_vel = min(self.max_linear_speed, distance_to_target * 0.5)
         
-        # Угловая скорость
         angular_vel = curvature * linear_vel
         
-        # Ограничения
         angular_vel = max(min(angular_vel, self.max_angular_speed), -self.max_angular_speed)
         
         return linear_vel, angular_vel, target_point
@@ -519,11 +482,9 @@ class Navigation(Node):
             self.visualize_path()
 
     def nav_timer(self):
-        """Улучшенный основной цикл навигации"""
         if not self.map_initialized or self.coverage_planner is None:
             return
 
-        # Проверка объектов
         if self.data is not None:
             results = self.model(self.data, verbose=False)
             if len(results[0].boxes) > 0:
@@ -536,7 +497,6 @@ class Navigation(Node):
                         return
 
         if not self.navigating_to_waypoint:
-            # Генерация пути (оставляем как было)
             current_grid = self.world_to_grid(self.x, self.y)
             if current_grid is None:
                 return
@@ -570,7 +530,6 @@ class Navigation(Node):
                 self.get_logger().error(f"Path planning error: {str(e)}")
                 return
 
-        # Навигация по точкам пути
         if self.navigating_to_waypoint and self.path:
             if self.current_waypoint_index >= len(self.path):
                 self.stop_robot()
@@ -580,24 +539,14 @@ class Navigation(Node):
 
             current_waypoint = self.path[self.current_waypoint_index]
             
-            # ВЫБОР КОНТРОЛЛЕРА - раскомментируйте нужный:
             
-            # Вариант 1: Улучшенный ПИД
             twist, distance, reached = self.improved_pid_navigate(
                 current_waypoint[0], current_waypoint[1]
             )
             
-            # Вариант 2: Pure Pursuit (лучше для плавного движения)
-            # linear_vel, angular_vel, _ = self.pure_pursuit_improved()
-            # twist = Twist()
-            # twist.linear.x = linear_vel
-            # twist.angular.z = angular_vel
-            # distance = math.hypot(current_waypoint[0] - self.x, current_waypoint[1] - self.y)
-            # reached = (distance < self.goal_tolerance)
             
             self.cmd_vel_pub.publish(twist)
 
-            # Переход к следующей точке
             if reached or distance < self.goal_tolerance:
                 self.current_waypoint_index += 1
                 self.reset_pid_state()
